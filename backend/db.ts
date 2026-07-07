@@ -351,21 +351,35 @@ async function persistAll(state: any): Promise<void> {
   console.log("DBP22: persistAll end");
 }
 
-function fromDbPayment(p: any): any {
+// The Prisma column is `notes` (Json) and `status` is a DB enum (UPPERCASE);
+// in-memory payments use lowercase status, like the API layer.
+export function fromDbPayment(p: any): any {
   if (!p) return p;
-  const { metadata, ...rest } = p;
-  return { ...rest, notes: metadata || undefined };
+  const { updatedAt, ...rest } = p;
+  return {
+    ...rest,
+    status: String(p.status || "created").toLowerCase(),
+    notes: p.notes || undefined,
+    createdAt: p.createdAt instanceof Date ? p.createdAt.toISOString() : p.createdAt,
+  };
 }
 
-function toDbPayment(p: any): any {
+export function toDbPayment(p: any): any {
   if (!p) return p;
-  const { notes, ...rest } = p;
-  return { ...rest, metadata: notes || undefined };
+  const { updatedAt, ...rest } = p;
+  return {
+    ...rest,
+    status: String(p.status || "created").toUpperCase(),
+    notes: p.notes || undefined,
+    createdAt: p.createdAt ? new Date(p.createdAt) : undefined,
+  };
 }
 
 async function safeUpsert(model: any, items: any[], key: string): Promise<void> {
   if (!items || items.length === 0) return;
   const chunkSize = 50;
+  let failed = 0;
+  let firstError: unknown = null;
   for (let i = 0; i < items.length; i += chunkSize) {
     const chunk = items.slice(i, i + chunkSize);
     try {
@@ -378,9 +392,18 @@ async function safeUpsert(model: any, items: any[], key: string): Promise<void> 
             create: item,
             update: item,
           });
-        } catch {}
+        } catch (e) {
+          failed++;
+          if (!firstError) firstError = e;
+        }
       }
     }
+  }
+  if (failed > 0) {
+    logger.error(
+      { err: firstError, failed, total: items.length },
+      "[db] safeUpsert: rows failed to persist — data exists only in memory"
+    );
   }
 }
 
